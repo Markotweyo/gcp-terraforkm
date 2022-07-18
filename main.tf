@@ -19,7 +19,7 @@ resource "google_compute_subnetwork" "subnet" {
  name          = "${var.name}-subnet"
  ip_cidr_range = "${var.subnet_cidr}"
  network       = "${var.name}-vpc"
- depends_on    = ["google_compute_network.vpc"]
+ depends_on    = [google_compute_network.vpc]
  region        = "${var.region}"
  
 }
@@ -70,16 +70,13 @@ resource "google_compute_instance" "vm_instance" {
   }
 }
 
-
-
-
 //Creating Autoscaller resource main
 
-resource "google_compute_autoscaler" "default" {
+resource "google_compute_region_autoscaler" "default" {
   provider = google-beta
   name     = "my-auto-scaler"
-  zone     = "us-east4-a"
-  target   = google_compute_instance_group_manager.default.id
+  region     = "us-east4"
+  target   = google_compute_region_instance_group_manager.default.id
 
   autoscaling_policy {
     max_replicas    = 5
@@ -97,30 +94,6 @@ resource "google_compute_autoscaler" "default" {
   }
 }
 
-
-//Creating Autoscaller resource main
-
-resource "google_compute_autoscaler" "backup" {
-  provider = google-beta
-  name     = "my-auto-scaler-backup"
-  zone     = "us-east4-b"
-  target   = google_compute_instance_group_manager.backup.id
-
-  autoscaling_policy {
-    max_replicas    = 5
-    min_replicas    = 3
-    cooldown_period = 60
-
-    metric {
-      name                       = "pubsub.googleapis.com/subscription/num_undelivered_messages"
-      filter                     = "resource.type = pubsub_subscription AND resource.label.subscription_id = our-subscription"
-      single_instance_assignment = 65535
-    }
-	cpu_utilization {
-      target = 0.7
-    }
-  }
-}
 
 //Creating Instance Template
 resource "google_compute_instance_template" "default" {
@@ -152,12 +125,24 @@ resource "google_compute_target_pool" "default" {
   name = "my-target-pool"
 }
 
+resource "google_compute_health_check" "autohealing" {
+  name                = "autohealing-health-check"
+  check_interval_sec  = 5
+  timeout_sec         = 5
+  healthy_threshold   = 2
+  unhealthy_threshold = 10 # 50 seconds
 
+  http_health_check {
+    request_path = "/healthz"
+    port         = "8080"
+  }
+}
 //Creating compte Instance google_compute_instance_group_manager
-resource "google_compute_instance_group_manager" "default" {
+resource "google_compute_region_instance_group_manager" "default" {
   provider = google-beta
   name = "main-my-igm"
-  zone = "us-east4-a"
+  region="us-east4"
+  distribution_policy_zones=["us-east4-a", "us-east4-b"]
 
   version {
     instance_template = google_compute_instance_template.default.id
@@ -179,38 +164,11 @@ resource "google_compute_instance_group_manager" "default" {
     name = "ssh"
     port = "22"
   }
-}
-
-
-//Creating compte Instance google_compute_instance_group_manager
-resource "google_compute_instance_group_manager" "backup" {
-  provider = google-beta
-  name = "backup-my-igm"
-  zone = "us-east4-b"
-
-  version {
-    instance_template = google_compute_instance_template.default.id
-    name              = "primary"
-  }
-
-  target_pools       = [google_compute_target_pool.default.id]
-  base_instance_name = "autoscaler-sample"
-
-  named_port {
-    name = "http"
-    port = "8080"
-  }
-  named_port {
-    name = "https"
-    port = "8443"
-  }
-   named_port {
-    name = "ssh"
-    port = "22"
+  auto_healing_policies {
+    health_check      = google_compute_health_check.autohealing.id
+    initial_delay_sec = 300
   }
 }
-
-
 
 data "google_compute_image" "debian_9" {
   provider = google-beta
